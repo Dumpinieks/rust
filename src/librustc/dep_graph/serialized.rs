@@ -1,23 +1,14 @@
 use rustc_data_structures::sync::worker::{Worker, WorkerExecutor};
 use rustc_data_structures::sync::Lrc;
 use rustc_data_structures::{unlikely, cold_path};
-use rustc_data_structures::indexed_vec::{IndexVec, Idx};
+use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_serialize::opaque;
 use rustc_serialize::{Decodable, Encodable};
 use std::mem;
 use std::fs::File;
 use std::io::Write;
+use super::prev::PreviousDepGraph;
 use super::graph::{DepNodeData, DepNodeIndex, DepNodeState};
-
-newtype_index! {
-    pub struct SerializedDepNodeIndex { .. }
-}
-
-impl SerializedDepNodeIndex {
-    pub fn current(self) -> DepNodeIndex {
-        DepNodeIndex::from_u32(self.as_u32())
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct SerializedDepGraph {
@@ -73,6 +64,7 @@ enum Action {
 }
 
 struct SerializerWorker {
+    previous: Lrc<PreviousDepGraph>,
     file: File,
 }
 
@@ -82,6 +74,16 @@ impl Worker for SerializerWorker {
 
     fn message(&mut self, (buffer_size_est, action): (usize, Action)) {
         let mut encoder = opaque::Encoder::new(Vec::with_capacity(buffer_size_est * 5));
+        let action = match action {
+            Action::UpdateNodes(nodes) => {
+                Action::UpdateNodes(nodes.into_iter().filter(|&(i, ref data)| {
+                    // Only emit nodes which actually changed
+                    data.fingerprint != self.previous.fingerprint_by_index(i)
+                        || &*data.edges != self.previous.edge_targets_from(i)
+                }).collect())
+            }
+            o => o,
+        };
         action.encode(&mut encoder).ok();
         self.file.write_all(&encoder.into_inner()).expect("unable to write to temp dep graph");
     }
@@ -100,9 +102,10 @@ pub struct Serializer {
 }
 
 impl Serializer {
-    pub fn new(file: File) -> Self {
+    pub fn new(file: File, previous: Lrc<PreviousDepGraph>) -> Self {
         Serializer {
             worker: Lrc::new(WorkerExecutor::new(SerializerWorker {
+                previous,
                 file,
             })),
             new_buffer: Vec::with_capacity(BUFFER_SIZE),

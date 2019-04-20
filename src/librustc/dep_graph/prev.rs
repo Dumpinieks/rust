@@ -2,10 +2,10 @@ use crate::ich::Fingerprint;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::indexed_vec::IndexVec;
 use super::dep_node::DepNode;
-use super::graph::{DepNodeIndex, DepNodeState};
+use super::graph::DepNodeIndex;
 use super::serialized::SerializedDepGraph;
 
-#[derive(Debug, /*RustcEncodable, RustcDecodable,*/ Default)]
+#[derive(Debug, Default)]
 pub struct PreviousDepGraph {
     /// Maps from dep nodes to their previous index, if any.
     index: FxHashMap<DepNode, DepNodeIndex>,
@@ -21,8 +21,6 @@ pub struct PreviousDepGraph {
     /// A flattened list of all edge targets in the graph. Edge sources are
     /// implicit in edge_list_indices.
     edge_list_data: Vec<DepNodeIndex>,
-    /// A set of nodes which are no longer valid.
-    pub(super) state: IndexVec<DepNodeIndex, DepNodeState>,
 }
 
 impl PreviousDepGraph {
@@ -61,7 +59,6 @@ impl PreviousDepGraph {
             edge_list_indices,
             edge_list_data,
             index,
-            state: graph.state.convert_index_type(),
         }
     }
 

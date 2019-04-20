@@ -120,23 +120,26 @@ where
     Some(stable_hasher.finish())
 }
 
+pub struct DepGraphArgs {
+    pub prev_graph: PreviousDepGraph,
+    pub prev_work_products: FxHashMap<WorkProductId, WorkProduct>,
+    pub file: File,
+    pub state: IndexVec<DepNodeIndex, AtomicCell<DepNodeState>>,
+}
+
 impl DepGraph {
 
-    pub fn new(
-        prev_graph: PreviousDepGraph,
-        prev_work_products: FxHashMap<WorkProductId, WorkProduct>,
-        file: File,
-    ) -> DepGraph {
+    pub fn new(args: DepGraphArgs) -> DepGraph {
         let colors = DepNodeColorMap {
-            values: prev_graph.state.iter().map(|s| AtomicCell::new(*s)).collect(),
+            values: args.state,
         };
-        let prev_graph = Lrc::new(prev_graph);
+        let prev_graph = Lrc::new(args.prev_graph);
 
         DepGraph {
             data: Some(Lrc::new(DepGraphData {
-                previous_work_products: prev_work_products,
+                previous_work_products: args.prev_work_products,
                 dep_node_debug: Default::default(),
-                current: CurrentDepGraph::new(prev_graph.clone(), file),
+                current: CurrentDepGraph::new(prev_graph.clone(), args.file),
                 emitted_diagnostics: Default::default(),
                 emitted_diagnostics_cond_var: Condvar::new(),
                 colors,

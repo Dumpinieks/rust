@@ -1,7 +1,7 @@
 //! Code to save/load the dep-graph from files.
 
 use rustc_data_structures::fx::FxHashMap;
-use rustc::dep_graph::{DepGraph, PreviousDepGraph, SerializedDepGraph, WorkProduct, WorkProductId};
+use rustc::dep_graph::{DepGraph, DepGraphArgs, PreviousDepGraph, SerializedDepGraph};
 use rustc::session::Session;
 use rustc::ty::TyCtxt;
 use rustc::ty::query::OnDiskCache;
@@ -27,26 +27,28 @@ pub fn dep_graph_tcx_init<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
 }
 
 pub fn dep_graph_from_future(sess: &Session, future: DepGraphFuture) -> DepGraph {
-    let (prev_graph, prev_work_products, file) =
-        time(sess, "blocked while dep-graph loading finishes", || {
-            future.open().unwrap_or_else(|e| LoadResult::Error {
-                message: format!("could not decode incremental cache: {:?}", e),
-            }).open(sess).unwrap_or_else(|| {
-                let temp_path = temp_dep_graph_path_from(&sess.incr_comp_session_dir());
-                // Write the file header to the temp file
-                let file = save_in(sess, temp_path, |encoder| {
-                    // Encode the commandline arguments hash
-                    sess.opts.dep_tracking_hash().encode(encoder).unwrap();
-                }).unwrap();
+    let args = time(sess, "blocked while dep-graph loading finishes", || {
+        future.open().unwrap_or_else(|e| LoadResult::Error {
+            message: format!("could not decode incremental cache: {:?}", e),
+        }).open(sess).unwrap_or_else(|| {
+            let temp_path = temp_dep_graph_path_from(&sess.incr_comp_session_dir());
+            // Write the file header to the temp file
+            let file = save_in(sess, temp_path, |encoder| {
+                // Encode the commandline arguments hash
+                sess.opts.dep_tracking_hash().encode(encoder).unwrap();
+            }).unwrap();
 
-                (Default::default(), Default::default(), file)
-            })
-        });
+            DepGraphArgs {
+                prev_graph: Default::default(),
+                prev_work_products: Default::default(),
+                file,
+                state: Default::default(),
+            }
+        })
+    });
 
-    DepGraph::new(prev_graph, prev_work_products, file)
+    DepGraph::new(args)
 }
-
-type WorkProductMap = FxHashMap<WorkProductId, WorkProduct>;
 
 pub enum LoadResult<T> {
     Ok { data: T },
@@ -54,8 +56,8 @@ pub enum LoadResult<T> {
     Error { message: String },
 }
 
-impl LoadResult<(PreviousDepGraph, WorkProductMap, File)> {
-    pub fn open(self, sess: &Session) -> Option<(PreviousDepGraph, WorkProductMap, File)> {
+impl LoadResult<DepGraphArgs> {
+    pub fn open(self, sess: &Session) -> Option<DepGraphArgs> {
         match self {
             LoadResult::Error { message } => {
                 sess.warn(&message);
@@ -116,7 +118,7 @@ impl<T> MaybeAsync<T> {
     }
 }
 
-pub type DepGraphFuture = MaybeAsync<LoadResult<(PreviousDepGraph, WorkProductMap, File)>>;
+pub type DepGraphFuture = MaybeAsync<LoadResult<DepGraphArgs>>;
 
 /// Launch a thread and load the dependency graph in the background.
 pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
@@ -203,11 +205,16 @@ pub fn load_dep_graph(sess: &Session) -> DepGraphFuture {
                         return LoadResult::DataOutOfDate;
                     }
 
-                    let dep_graph = SerializedDepGraph::decode(&mut decoder)
+                    let (dep_graph, state) = SerializedDepGraph::decode(&mut decoder)
                         .expect("Error reading cached dep-graph");
 
                     LoadResult::Ok {
-                        data: (PreviousDepGraph::new(dep_graph), prev_work_products, file)
+                        data: DepGraphArgs {
+                            prev_graph: PreviousDepGraph::new(dep_graph),
+                            prev_work_products,
+                            file,
+                            state,
+                        }
                     }
                 }
             }

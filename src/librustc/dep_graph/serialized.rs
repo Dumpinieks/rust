@@ -1,5 +1,5 @@
 use rustc_data_structures::sync::worker::{Worker, WorkerExecutor};
-use rustc_data_structures::sync::Lrc;
+use rustc_data_structures::sync::{Lrc, AtomicCell};
 use rustc_data_structures::{unlikely, cold_path};
 use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_serialize::opaque;
@@ -13,11 +13,12 @@ use super::graph::{DepNodeData, DepNodeIndex, DepNodeState};
 #[derive(Debug, Default)]
 pub struct SerializedDepGraph {
     pub(super) nodes: IndexVec<DepNodeIndex, DepNodeData>,
-    pub(super) state: IndexVec<DepNodeIndex, DepNodeState>,
 }
 
 impl SerializedDepGraph {
-    pub fn decode(d: &mut opaque::Decoder<'_>) -> Result<Self, String> {
+    pub fn decode(
+        d: &mut opaque::Decoder<'_>
+    ) -> Result<(Self, IndexVec<DepNodeIndex, AtomicCell<DepNodeState>>), String> {
         let mut nodes = IndexVec::new();
         let mut invalidated_list = Vec::new();
         loop {
@@ -39,15 +40,14 @@ impl SerializedDepGraph {
             }
         }
         let mut state: IndexVec<_, _> = (0..nodes.len()).map(|_| {
-            DepNodeState::Unknown
+            AtomicCell::new(DepNodeState::Unknown)
         }).collect();
         for i in invalidated_list {
-            state[i] = DepNodeState::Invalidated;
+            state[i] = AtomicCell::new(DepNodeState::Invalidated);
         }
-        Ok(SerializedDepGraph {
-            nodes,
-            state,
-        })
+        Ok((SerializedDepGraph {
+            nodes
+        }, state))
     }
 }
 

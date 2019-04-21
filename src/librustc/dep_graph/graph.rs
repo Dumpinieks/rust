@@ -61,11 +61,9 @@ pub enum DepNodeState {
 
     /// The node will eventually be green (it was previously Unknown),
     /// but its side effects (like error messages) have not yet happened.
+    /// This only exist so we can know which thread
+    /// marked a node as green in `try_mark_previous_green`.
     WasUnknownWillBeGreen,
-
-    /// The node will eventually be green (it was previously Invalid),
-    /// but its side effects (like error messages) have not yet happened.
-    WasInvalidWillBeGreen,
 
     Red,
 
@@ -77,8 +75,7 @@ impl DepNodeState {
         match self {
             DepNodeState::Invalid |
             DepNodeState::Unknown |
-            DepNodeState::WasUnknownWillBeGreen |
-            DepNodeState::WasInvalidWillBeGreen => None,
+            DepNodeState::WasUnknownWillBeGreen => None,
             DepNodeState::Red => Some(DepNodeColor::Red),
             DepNodeState::Green => Some(DepNodeColor::Green),
         }
@@ -614,8 +611,7 @@ impl DepGraph {
             DepNodeState::Invalid |
             DepNodeState::Red => None,
             DepNodeState::Unknown |
-            DepNodeState::WasUnknownWillBeGreen |
-            DepNodeState::WasInvalidWillBeGreen => {
+            DepNodeState::WasUnknownWillBeGreen => {
                 // This DepNode and the corresponding query invocation existed
                 // in the previous compilation session too, so we can try to
                 // mark it as green by recursively marking all of its
@@ -683,8 +679,7 @@ impl DepGraph {
                 }
                 DepNodeState::Invalid |
                 DepNodeState::Unknown |
-                DepNodeState::WasUnknownWillBeGreen |
-                DepNodeState::WasInvalidWillBeGreen => {
+                DepNodeState::WasUnknownWillBeGreen => {
                     bug!("try_force_previous_green() - Forcing the DepNode \
                             should have set its color")
                 }
@@ -711,6 +706,9 @@ impl DepGraph {
         {
             debug_assert!(data.colors.get(dep_node_index).color().is_none());
         }
+
+        // We cannot mark invalid results as green
+        debug_assert_ne!(data.colors.get(dep_node_index), DepNodeState::Invalid);
 
         // We never try to mark eval_always nodes as green
         debug_assert!(!dep_node.kind.is_eval_always());
@@ -745,7 +743,6 @@ impl DepGraph {
                 }
                 // Either the previous result is too old or
                 // this is a eval_always node. Try to force the node
-                DepNodeState::WasInvalidWillBeGreen |
                 DepNodeState::Invalid => {
                     if !self.try_force_previous_green(tcx, data, dep_dep_node_index) {
                         return false;
@@ -888,8 +885,7 @@ impl DepGraph {
                             None
                         }
                     }
-                    DepNodeState::WasUnknownWillBeGreen |
-                    DepNodeState::WasInvalidWillBeGreen => bug!("no tasks should be in progress"),
+                    DepNodeState::WasUnknownWillBeGreen => bug!("no tasks should be in progress"),
                     DepNodeState::Invalid |
                     DepNodeState::Unknown |
                     DepNodeState::Red => {
@@ -1167,18 +1163,15 @@ struct DepNodeColorMap {
 }
 
 impl DepNodeColorMap {
-    /// Tries to mark the node as WillBeGreen. Returns false if another thread did it before us.
+    /// Tries to mark the node as WasUnknownWillBeGreen.
+    /// Returns false if another thread did it before us.
     #[inline]
     fn mark_as_will_be_green(&self, index: DepNodeIndex) -> bool {
-        let prev = self.get(index);
-        let next = match prev {
-            DepNodeState::Invalid => DepNodeState::WasInvalidWillBeGreen,
-            DepNodeState::Unknown => DepNodeState::WasUnknownWillBeGreen,
-            _ => return false,
-        };
-
-        let actual_prev = self.values[index].compare_and_swap(prev, next);
-        actual_prev == prev
+        let actual_prev = self.values[index].compare_and_swap(
+            DepNodeState::Unknown,
+            DepNodeState::WasUnknownWillBeGreen,
+        );
+        actual_prev == DepNodeState::Unknown
     }
 
     #[inline]

@@ -58,9 +58,13 @@ pub enum DepNodeState {
     /// The node is from the previous session, but its state is unknown
     Unknown,
 
-    /// The node will eventually be green,
+    /// The node will eventually be green (it was previously Unknown),
     /// but its side effects (like error messages) have not yet happened.
-    WillBeGreen,
+    WasUnknownWillBeGreen,
+
+    /// The node will eventually be green (it was previously Invalid),
+    /// but its side effects (like error messages) have not yet happened.
+    WasInvalidWillBeGreen,
 
     Red,
 
@@ -72,7 +76,8 @@ impl DepNodeState {
         match self {
             DepNodeState::Invalid |
             DepNodeState::Unknown |
-            DepNodeState::WillBeGreen => None,
+            DepNodeState::WasUnknownWillBeGreen |
+            DepNodeState::WasInvalidWillBeGreen => None,
             DepNodeState::Red => Some(DepNodeColor::Red),
             DepNodeState::Green => Some(DepNodeColor::Green),
         }
@@ -608,7 +613,8 @@ impl DepGraph {
             DepNodeState::Invalid |
             DepNodeState::Red => None,
             DepNodeState::Unknown |
-            DepNodeState::WillBeGreen => {
+            DepNodeState::WasUnknownWillBeGreen |
+            DepNodeState::WasInvalidWillBeGreen => {
                 // This DepNode and the corresponding query invocation existed
                 // in the previous compilation session too, so we can try to
                 // mark it as green by recursively marking all of its
@@ -624,6 +630,68 @@ impl DepGraph {
                     None
                 }
             }
+        }
+    }
+
+    /// Try to force a dep node to execute and see if it's green
+    fn try_force_previous_green<'tcx>(
+        &self,
+        tcx: TyCtxt<'_, 'tcx, 'tcx>,
+        data: &DepGraphData,
+        dep_node_index: DepNodeIndex,
+    ) -> bool {
+        let dep_node = &data.previous.index_to_node(dep_node_index);
+
+        match dep_node.kind {
+            DepKind::Hir |
+            DepKind::HirBody |
+            DepKind::CrateMetadata => {
+                if dep_node.extract_def_id(tcx).is_none() {
+                    // If the node does not exist anymore, we
+                    // just fail to mark green.
+                    return false
+                } else {
+                    // If the node does exist, it should have
+                    // been pre-allocated.
+                    bug!("DepNode {:?} should have been \
+                            pre-allocated but wasn't.",
+                            dep_node)
+                }
+            }
+            _ => {
+                // For other kinds of nodes it's OK to be
+                // forced.
+            }
+        }
+
+        debug!("try_force_previous_green({:?}) --- trying to force", dep_node);
+        if crate::ty::query::force_from_dep_node(tcx, dep_node) {
+            match data.colors.get(dep_node_index) {
+                DepNodeState::Green => {
+                    debug!("try_force_previous_green({:?}) --- managed to \
+                            FORCE to green",
+                            dep_node);
+                    true
+                }
+                DepNodeState::Red => {
+                    debug!(
+                        "try_force_previous_green({:?}) - END - was red after forcing",
+                        dep_node
+                    );
+                    false
+                }
+                DepNodeState::Invalid |
+                DepNodeState::Unknown |
+                DepNodeState::WasUnknownWillBeGreen |
+                DepNodeState::WasInvalidWillBeGreen => {
+                    bug!("try_force_previous_green() - Forcing the DepNode \
+                            should have set its color")
+                }
+            }
+        } else {
+            // The DepNode could not be forced.
+            debug!("try_force_previous_green({:?}) - END - could not be forced", dep_node);
+            false
         }
     }
 
@@ -674,83 +742,35 @@ impl DepGraph {
                             data.previous.index_to_node(dep_dep_node_index));
                     return false
                 }
-                DepNodeState::Invalid => panic!("can this happen?"),
-                DepNodeState::WillBeGreen |
+                // Either the previous result is too old or
+                // this is a eval_always node. Try to force the node
+                DepNodeState::WasInvalidWillBeGreen |
+                DepNodeState::Invalid => {
+                    if !self.try_force_previous_green(tcx, data, dep_dep_node_index) {
+                        return false;
+                    }
+                }
+                DepNodeState::WasUnknownWillBeGreen |
                 DepNodeState::Unknown => {
                     let dep_dep_node = &data.previous.index_to_node(dep_dep_node_index);
 
-                    // We don't know the state of this dependency. If it isn't
-                    // an eval_always node, let's try to mark it green recursively.
-                    if !dep_dep_node.kind.is_eval_always() {
-                         debug!("try_mark_previous_green({:?}) --- state of dependency {:?} \
-                                 is unknown, trying to mark it green", dep_node,
-                                 dep_dep_node);
-
-                        if self.try_mark_previous_green(
-                            tcx,
-                            data,
-                            dep_dep_node_index,
-                            dep_dep_node
-                        ) {
-                            debug!("try_mark_previous_green({:?}) --- managed to MARK \
-                                    dependency {:?} as green", dep_node, dep_dep_node);
-                            continue;
-                        }
-                    } else {
-                        match dep_dep_node.kind {
-                            DepKind::Hir |
-                            DepKind::HirBody |
-                            DepKind::CrateMetadata => {
-                                if dep_dep_node.extract_def_id(tcx).is_none() {
-                                    // If the node does not exist anymore, we
-                                    // just fail to mark green.
-                                    return false
-                                } else {
-                                    // If the node does exist, it should have
-                                    // been pre-allocated.
-                                    bug!("DepNode {:?} should have been \
-                                          pre-allocated but wasn't.",
-                                          dep_dep_node)
-                                }
-                            }
-                            _ => {
-                                // For other kinds of nodes it's OK to be
-                                // forced.
-                            }
-                        }
+                    // We don't know the state of this dependency.
+                    // We known it is not an eval_always node, since those get marked as `Invalid`.
+                    // Let's try to mark it green recursively.
+                    if self.try_mark_previous_green(
+                        tcx,
+                        data,
+                        dep_dep_node_index,
+                        dep_dep_node
+                    ) {
+                        debug!("try_mark_previous_green({:?}) --- managed to MARK \
+                                dependency {:?} as green", dep_node, dep_dep_node);
+                        continue;
                     }
 
                     // We failed to mark it green, so we try to force the query.
-                    debug!("try_mark_previous_green({:?}) --- trying to force \
-                            dependency {:?}", dep_node, dep_dep_node);
-                    if crate::ty::query::force_from_dep_node(tcx, dep_dep_node) {
-                        let dep_dep_node_color = data.colors.get(dep_dep_node_index);
-
-                        match dep_dep_node_color {
-                            DepNodeState::Green => {
-                                debug!("try_mark_previous_green({:?}) --- managed to \
-                                        FORCE dependency {:?} to green",
-                                        dep_node, dep_dep_node);
-                            }
-                            DepNodeState::Red => {
-                                debug!("try_mark_previous_green({:?}) - END - \
-                                        dependency {:?} was red after forcing",
-                                       dep_node,
-                                       dep_dep_node);
-                                return false
-                            }
-                            DepNodeState::Invalid |
-                            DepNodeState::Unknown |
-                            DepNodeState::WillBeGreen => {
-                                bug!("try_mark_previous_green() - Forcing the DepNode \
-                                        should have set its color")
-                            }
-                        }
-                    } else {
-                        // The DepNode could not be forced.
-                        debug!("try_mark_previous_green({:?}) - END - dependency {:?} \
-                                could not be forced", dep_node, dep_dep_node);
-                        return false
+                    if !self.try_force_previous_green(tcx, data, dep_dep_node_index) {
+                        return false;
                     }
                 }
             }
@@ -864,7 +884,8 @@ impl DepGraph {
                             None
                         }
                     }
-                    DepNodeState::WillBeGreen => bug!("no tasks should be in progress"),
+                    DepNodeState::WasUnknownWillBeGreen |
+                    DepNodeState::WasInvalidWillBeGreen => bug!("no tasks should be in progress"),
                     DepNodeState::Invalid |
                     DepNodeState::Unknown |
                     DepNodeState::Red => {
@@ -1145,11 +1166,15 @@ impl DepNodeColorMap {
     /// Tries to mark the node as WillBeGreen. Returns false if another thread did it before us.
     #[inline]
     fn mark_as_will_be_green(&self, index: DepNodeIndex) -> bool {
-        let prev = self.values[index].compare_and_swap(
-            DepNodeState::Unknown,
-            DepNodeState::WillBeGreen
-        );
-        prev == DepNodeState::Unknown
+        let prev = self.get(index);
+        let next = match prev {
+            DepNodeState::Invalid => DepNodeState::WasInvalidWillBeGreen,
+            DepNodeState::Unknown => DepNodeState::WasUnknownWillBeGreen,
+            _ => return false,
+        };
+
+        let actual_prev = self.values[index].compare_and_swap(prev, next);
+        actual_prev == prev
     }
 
     #[inline]

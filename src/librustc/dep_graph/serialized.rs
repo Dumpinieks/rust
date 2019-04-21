@@ -95,6 +95,7 @@ const BUFFER_SIZE: usize = 800000;
 
 pub struct Serializer {
     worker: Lrc<WorkerExecutor<SerializerWorker>>,
+    node_count: u32,
     new_buffer: Vec<DepNodeData>,
     new_buffer_size: usize,
     updated_buffer: Vec<(DepNodeIndex, DepNodeData)>,
@@ -104,6 +105,7 @@ pub struct Serializer {
 impl Serializer {
     pub fn new(file: File, previous: Lrc<PreviousDepGraph>) -> Self {
         Serializer {
+            node_count: previous.node_count() as u32,
             worker: Lrc::new(WorkerExecutor::new(SerializerWorker {
                 previous,
                 file,
@@ -123,7 +125,7 @@ impl Serializer {
     }
 
     #[inline]
-    pub(super) fn serialize_new(&mut self, data: DepNodeData) {
+    pub(super) fn serialize_new(&mut self, data: DepNodeData) -> DepNodeIndex {
         let edges = data.edges.len();
         self.new_buffer.push(data);
         self.new_buffer_size += 8 + edges;
@@ -132,6 +134,9 @@ impl Serializer {
                 self.flush_new();
             })
         }
+        let index = self.node_count;
+        self.node_count += 1;
+        DepNodeIndex::from_u32(index)
     }
 
     fn flush_updated(&mut self) {

@@ -3,7 +3,7 @@ use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::indexed_vec::{Idx, IndexVec};
 use smallvec::SmallVec;
-use rustc_data_structures::sync::{Lrc, Lock, AtomicCell, AtomicUsize, AtomicU64};
+use rustc_data_structures::sync::{Lrc, Lock, AtomicCell, AtomicU64};
 use std::sync::atomic::Ordering::{Acquire, SeqCst};
 use std::env;
 use std::fs::File;
@@ -953,8 +953,6 @@ pub(super) struct DepNodeData {
 
 pub(super) struct CurrentDepGraph {
     //data: FxHashMap<DepNodeIndex, DepNodeData>,
-    node_count: AtomicUsize,
-
     /// Used to map input nodes to a node index. Used by the `read` method.
     input_node_to_node_index: Lock<FxHashMap<DepNode, DepNodeIndex>>,
 
@@ -1016,7 +1014,6 @@ impl CurrentDepGraph {
 
         CurrentDepGraph {
             //data: FxHashMap::default(),
-            node_count: AtomicUsize::new(prev_graph.node_count()),
             anon_node_to_node_index: Default::default(),
             input_node_to_node_index: Default::default(),
             anon_id_seed: stable_hasher.finish(),
@@ -1074,13 +1071,11 @@ impl CurrentDepGraph {
         previous: &PreviousDepGraph,
     ) -> DepNodeIndex {
         debug_assert!(previous.node_to_index_opt(&dep_node).is_none());
-        let dep_node_index = DepNodeIndex::new(self.node_count.fetch_add(1, SeqCst));
         self.serializer.lock().serialize_new(DepNodeData {
             node: dep_node,
             edges,
             fingerprint
-        });
-        dep_node_index
+        })
     }
 
     fn update_node(

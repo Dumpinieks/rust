@@ -13,7 +13,7 @@ pub struct PreviousDepGraph {
     nodes: IndexVec<DepNodeIndex, DepNode>,
     /// The set of all Fingerprints in the graph. Each Fingerprint corresponds to
     /// the DepNode at the same index in the nodes vector.
-    fingerprints: IndexVec<DepNodeIndex, Fingerprint>,
+    pub(super) fingerprints: IndexVec<DepNodeIndex, Fingerprint>,
     /// For each DepNode, stores the list of edges originating from that
     /// DepNode. Encoded as a [start, end) pair indexing into edge_list_data,
     /// which holds the actual DepNodeIndices of the target nodes.
@@ -30,8 +30,6 @@ impl PreviousDepGraph {
             .map(|(idx, dep_node)| (dep_node.node, idx))
             .collect();
 
-        let fingerprints: IndexVec<DepNodeIndex, _> =
-            graph.nodes.iter().map(|d| d.fingerprint).collect();
         let nodes: IndexVec<DepNodeIndex, _> =
             graph.nodes.iter().map(|d| d.node).collect();
 
@@ -54,7 +52,7 @@ impl PreviousDepGraph {
         debug_assert_eq!(edge_list_data.len(), total_edge_count);
 
         PreviousDepGraph {
-            fingerprints,
+            fingerprints: graph.fingerprints,
             nodes,
             edge_list_indices,
             edge_list_data,

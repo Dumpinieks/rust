@@ -53,7 +53,7 @@ impl DepNodeColor {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DepNodeState {
     /// The node is invalid since its result is older than the previous session.
-    Invalidated,
+    Invalid,
 
     /// The node is from the previous session, but its state is unknown
     Unknown,
@@ -70,7 +70,7 @@ pub enum DepNodeState {
 impl DepNodeState {
     pub fn color(self) -> Option<DepNodeColor> {
         match self {
-            DepNodeState::Invalidated |
+            DepNodeState::Invalid |
             DepNodeState::Unknown |
             DepNodeState::WillBeGreen => None,
             DepNodeState::Red => Some(DepNodeColor::Red),
@@ -546,7 +546,7 @@ impl DepGraph {
         }
     }
 
-    pub fn serialize(&self) {
+    pub fn serialize(&self) -> IndexVec<DepNodeIndex, Fingerprint> {
         let data = self.data.as_ref().unwrap();
         // Invalidate dep nodes with unknown state as these cannot safely
         // be marked green in the next session.
@@ -605,7 +605,7 @@ impl DepGraph {
 
         match data.colors.get(prev_index) {
             DepNodeState::Green => Some(prev_index),
-            DepNodeState::Invalidated |
+            DepNodeState::Invalid |
             DepNodeState::Red => None,
             DepNodeState::Unknown |
             DepNodeState::WillBeGreen => {
@@ -674,7 +674,7 @@ impl DepGraph {
                             data.previous.index_to_node(dep_dep_node_index));
                     return false
                 }
-                DepNodeState::Invalidated => panic!("can this happen?"),
+                DepNodeState::Invalid => panic!("can this happen?"),
                 DepNodeState::WillBeGreen |
                 DepNodeState::Unknown => {
                     let dep_dep_node = &data.previous.index_to_node(dep_dep_node_index);
@@ -739,7 +739,7 @@ impl DepGraph {
                                        dep_dep_node);
                                 return false
                             }
-                            DepNodeState::Invalidated |
+                            DepNodeState::Invalid |
                             DepNodeState::Unknown |
                             DepNodeState::WillBeGreen => {
                                 bug!("try_mark_previous_green() - Forcing the DepNode \
@@ -865,7 +865,7 @@ impl DepGraph {
                         }
                     }
                     DepNodeState::WillBeGreen => bug!("no tasks should be in progress"),
-                    DepNodeState::Invalidated |
+                    DepNodeState::Invalid |
                     DepNodeState::Unknown |
                     DepNodeState::Red => {
                         // We can skip red nodes because a node can only be marked
@@ -944,7 +944,7 @@ pub enum WorkProductFileKind {
     BytecodeCompressed,
 }
 
-#[derive(Clone, Debug, RustcDecodable, RustcEncodable)]
+#[derive(Clone, Debug)]
 pub(super) struct DepNodeData {
     pub(super) node: DepNode,
     pub(super) edges: TaskReads,

@@ -68,7 +68,7 @@ impl SerializedDepGraph {
         }
         Ok((SerializedDepGraph {
             nodes,
-            fingerprints: IndexVec::decode(results_d)?,
+            fingerprints,
         }, state))
     }
 }

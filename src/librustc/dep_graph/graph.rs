@@ -9,6 +9,7 @@ use std::env;
 use std::fs::File;
 use std::hash::Hash;
 use std::collections::hash_map::Entry;
+use std::mem;
 use crate::ty::{self, TyCtxt};
 use crate::util::common::{ProfileQueriesMsg, profq_msg};
 use parking_lot::{Mutex, Condvar};
@@ -802,6 +803,9 @@ impl DepGraph {
                 did_mark,
                 diagnostics
             );
+        } else {
+            // Avoid calling the destructor, since LLVM fails to optimize it away
+            mem::forget(diagnostics);
         }
 
         // ... and finally storing a "Green" entry in the color map.

@@ -2,7 +2,7 @@
 //! generate the actual methods on tcx which find and execute the provider,
 //! manage the caches, and so forth.
 
-use crate::dep_graph::{DepNodeIndex, DepNode, DepKind, SerializedDepNodeIndex};
+use crate::dep_graph::{DepNodeIndex, DepNode, DepKind};
 use crate::ty::tls;
 use crate::ty::{self, TyCtxt};
 use crate::ty::query::Query;
@@ -420,10 +420,9 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             // try_mark_green(), so we can ignore them here.
             let loaded = self.start_query(job.job.clone(), None, |tcx| {
                 let marked = tcx.dep_graph.try_mark_green_and_read(tcx, &dep_node);
-                marked.map(|(prev_dep_node_index, dep_node_index)| {
+                marked.map(|dep_node_index| {
                     (tcx.load_from_disk_and_cache_in_memory::<Q>(
                         key.clone(),
-                        prev_dep_node_index,
                         dep_node_index,
                         &dep_node
                     ), dep_node_index)
@@ -443,7 +442,6 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     fn load_from_disk_and_cache_in_memory<Q: QueryDescription<'gcx>>(
         self,
         key: Q::Key,
-        prev_dep_node_index: SerializedDepNodeIndex,
         dep_node_index: DepNodeIndex,
         dep_node: &DepNode
     ) -> Q::Value
@@ -457,7 +455,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         let result = if Q::cache_on_disk(self.global_tcx(), key.clone()) &&
                         self.sess.opts.debugging_opts.incremental_queries {
             self.sess.profiler(|p| p.incremental_load_result_start(Q::NAME));
-            let result = Q::try_load_from_disk(self.global_tcx(), prev_dep_node_index);
+            let result = Q::try_load_from_disk(self.global_tcx(), dep_node_index);
             self.sess.profiler(|p| p.incremental_load_result_end(Q::NAME));
 
             // We always expect to find a cached result for things that
@@ -500,7 +498,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         }
 
         if unlikely!(self.sess.opts.debugging_opts.query_dep_graph) {
-            self.dep_graph.mark_loaded_from_cache(dep_node_index, true);
+            self.dep_graph.mark_loaded_from_cache(*dep_node, true);
         }
 
         result
@@ -510,10 +508,11 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     #[cold]
     fn incremental_verify_ich<Q: QueryDescription<'gcx>>(
         self,
-        result: &Q::Value,
-        dep_node: &DepNode,
-        dep_node_index: DepNodeIndex,
+        _result: &Q::Value,
+        _dep_node: &DepNode,
+        _dep_node_index: DepNodeIndex,
     ) {
+        panic!()/*
         use crate::ich::Fingerprint;
 
         assert!(Some(self.dep_graph.fingerprint_of(dep_node_index)) ==
@@ -530,7 +529,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         let old_hash = self.dep_graph.fingerprint_of(dep_node_index);
 
         assert!(new_hash == old_hash, "Found unstable fingerprints \
-            for {:?}", dep_node);
+            for {:?}", dep_node);*/
     }
 
     #[inline(always)]
@@ -545,11 +544,14 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         //    in DepGraph::try_mark_green()
         // 2. Two distinct query keys get mapped to the same DepNode
         //    (see for example #48923)
-        assert!(!self.dep_graph.dep_node_exists(&dep_node),
-                "Forcing query with already existing DepNode.\n\
-                 - query-key: {:?}\n\
-                 - dep-node: {:?}",
-                key, dep_node);
+        /*debug_assert!(
+            !self.dep_graph.dep_node_exists(&dep_node),
+            "Forcing query with already existing DepNode.\n\
+                - query-key: {:?}\n\
+                - dep-node: {:?}",
+            key,
+            dep_node,
+        );*/
 
         profq_msg!(self, ProfileQueriesMsg::ProviderBegin);
         self.sess.profiler(|p| p.start_query(Q::NAME));
@@ -576,7 +578,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         profq_msg!(self, ProfileQueriesMsg::ProviderEnd);
 
         if unlikely!(self.sess.opts.debugging_opts.query_dep_graph) {
-            self.dep_graph.mark_loaded_from_cache(dep_node_index, false);
+            self.dep_graph.mark_loaded_from_cache(dep_node, false);
         }
 
         if dep_node.kind != crate::dep_graph::DepKind::Null {
